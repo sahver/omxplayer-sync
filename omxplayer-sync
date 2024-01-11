@@ -24,7 +24,7 @@ import collections
 from datetime import datetime
 from time import sleep, time
 from optparse import OptionParser, BadOptionError, AmbiguousOptionError
-from subprocess import Popen
+from subprocess import Popen, PIPE
 try:
     from subprocess import DEVNULL
 except ImportError:
@@ -32,7 +32,7 @@ except ImportError:
     DEVNULL = open(os.devnull, 'wb')
 
 SYNC_TOLERANCE = .1
-SYNC_GRACE_TIME = 1
+SYNC_GRACE_TIME = 3
 SYNC_JUMP_AHEAD = 1
 
 OMXPLAYER = 'omxplayer'
@@ -99,14 +99,10 @@ class PlayerInterface():
             return False
 
     def initialize(self):
-        _print('initialize() begin')
         while not self._get_dbus_interface():
             sleep(0.1)
-#        sleep(10) # wait for omxplayer to appear on dbus
-        _print('initialize() dbus established')
         while not self.Position():
             sleep(0.1)
-        _print('initialize() end')
         return self._get_dbus_interface()
 
     def playPause(self):
@@ -190,9 +186,8 @@ class OMXPlayerSync():
             sys.exit(1)
 
         self.omxplayer_options.append("-o %s" % self.options.adev)
-        self.omxplayer_options.append('--no-keys')
 
-        if not self.options.verbose:
+        if not self.options.verbose and not self.options.debug:
             self.omxplayer_options.append('--no-osd')
 
         if self.options.master:
@@ -231,8 +226,8 @@ class OMXPlayerSync():
         self.process = Popen([OMXPLAYER] \
             + list(itertools.chain(*map(lambda x: x.split(' '), self.omxplayer_options))) \
             + [self.filename],
-            preexec_fn=os.setsid, stdout=DEVNULL, stderr=DEVNULL, stdin=DEVNULL)
-
+            preexec_fn=os.setsid, stdout=PIPE, stderr=PIPE, stdin=PIPE, bufsize=0)
+        
         self.controller.initialize()
 
         if not self.read_position_local():
@@ -240,6 +235,7 @@ class OMXPlayerSync():
             self.kill_omxplayer_and_exit()
 
         if self.options.slave:
+            acceleration = 0
             wait_for_sync = False
             wait_after_sync = False
             deviations = collections.deque(maxlen=10)
@@ -269,9 +265,6 @@ class OMXPlayerSync():
                 self.send_position_local()
                 if self.options.debug:
                     hh, mm, ss = _seconds_to_duration(self.position_local)
-#                    if hh == 0 and mm == 0 and ss == 0:
-#                        _print("")
-#                    else:
                     _print("{} ~ {:02d}:{:02d}:{:02d}/{}".format(self.filename, hh, mm, ss, int(current_frame_local)), end='\r')
                 elif self.options.verbose:
                     sys.stdout.write("local: %.2f %.0f\n" %
@@ -285,13 +278,11 @@ class OMXPlayerSync():
                 deviation = self.position_master - self.position_local
                 deviations.append(deviation)
                 median_deviation = self.median(list(deviations))
+                latest_deviation = deviations[-1]
 
-                if self.options.debug:
-                    hh, mm, ss = _seconds_to_duration(self.position_master)
-#                    if hh == 0 and mm == 0 and ss == 0:
-#                        _print("")
-#                    else:
-                    _print("{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}".format(self.filename, hh, mm, ss, abs(median_deviation)), end='\r')
+                if self.options.debug or self.options.verbose:
+                    hh, mm, ss = _seconds_to_duration(self.position_local)
+                    _print('{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}s {:10}'.format(self.filename, hh, mm, ss, median_deviation, '→' if acceleration > 0 else ('←' if acceleration < 0 else '⏺')), end='\r')
 
                 elif self.options.verbose:
                     sys.stdout.write("local: %.2f %.0f master: %.2f %.0f deviation: %.2f median_deviation: %.2f filename: %s\n" % (
@@ -303,46 +294,67 @@ class OMXPlayerSync():
                         median_deviation,
                         self.filename))
 
-                if wait_for_sync:
-                    while True:
-                        if abs(deviation) - (time() - sync_timer) < 0:
-                             if self.options.verbose:
-                                 _print("we are sync, play...")
-                             if not self.controller.playPause():
-                                 break
-
-                             wait_for_sync = False
-                             wait_after_sync = time()
-                             break
-
-                    continue
-
                 if wait_after_sync:
                     if (time() - wait_after_sync) > SYNC_GRACE_TIME:
                          wait_after_sync = False
 
                     continue
 
-                if abs(median_deviation) > SYNC_TOLERANCE \
+                #
+                # Syncing 
+                #
+
+                # Big diff, jump to proximity
+                if abs(median_deviation) > SYNC_JUMP_AHEAD \
                 and self.position_local > SYNC_GRACE_TIME \
                 and self.position_master > SYNC_GRACE_TIME:
-                    if self.options.debug:
-                        _print("")
-                    elif self.options.verbose:
-                        _print("jump to %.2f" % (self.position_master + SYNC_JUMP_AHEAD))
-                        _print("enter pause...")
-                    if not self.controller.playPause():
-                        break
-                    if not self.controller.setPosition(self.position_master + SYNC_JUMP_AHEAD):
+                    if self.options.debug or self.options.verbose:
+                        print("")
+                        hh, mm, ss = _seconds_to_duration(self.position_master)
+                        _print('→ {:02d}:{:02d}:{:02d}'.format(hh, mm, ss))
+                    if not self.controller.setPosition(self.position_master):
                         break
 
                     wait_for_sync = True
                     wait_after_sync = time()
+                    deviations.clear()
+
+                # Small diff, compensate with speed
+                elif abs(latest_deviation) > SYNC_TOLERANCE \
+                and self.position_local > SYNC_GRACE_TIME \
+                and self.position_master > SYNC_GRACE_TIME:
+                    
+                    if not acceleration:
+                        if latest_deviation > 0:
+                            acceleration = 1
+                            self.speed_up()
+                        else:
+                            acceleration = -1
+                            self.slow_down()
+
+                # OK, we are in sync
+                else:
+
+                    # Reset speed
+                    if acceleration:
+                        if acceleration > 0:
+                            self.slow_down()
+                        else:
+                            self.speed_up()
+                        
+                        acceleration = 0
+                        deviations.clear()
 
             if self.options.master:
                 sleep(1)
 
         self.kill_omxplayer()
+
+    def slow_down(self):
+        self.process.stdin.write('1'.encode()) 
+
+    def speed_up(self):
+        self.process.stdin.write('2'.encode()) 
 
     def read_position_local(self):
         position_local = self.controller.Position()
