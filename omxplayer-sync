@@ -93,7 +93,7 @@ class PlayerInterface():
                 proxy, 'org.freedesktop.DBus.Properties')
             return True
         except Exception as e:
-            _print("WARNING: dbus connection could not be established")
+#            _print("WARNING: dbus connection could not be established")
 #            print(e)
 #            sleep(5)
             return False
@@ -187,7 +187,10 @@ class OMXPlayerSync():
 
         self.omxplayer_options.append("-o %s" % self.options.adev)
 
-        if not self.options.verbose and not self.options.debug:
+        if self.options.debug:
+            self.options.verbose = True
+
+        if not self.options.debug:
             self.omxplayer_options.append('--no-osd')
 
         if self.options.master:
@@ -205,7 +208,7 @@ class OMXPlayerSync():
 
     def play_file(self, filename):
         if not os.path.isfile(filename):
-            if  self.options.verbose:
+            if  self.options.debug:
                 _print("WARNING: %s file not found" % filename)
             self.increment_playlist_index()
             return
@@ -215,7 +218,7 @@ class OMXPlayerSync():
         self.position_local_oldage = 0.0
         self.position_local_oldage_count = 0
 
-        if self.options.verbose or self.options.debug:
+        if self.options.verbose:
             last_frame_local, current_frame_local = 0, 0
             if self.options.slave:
                 last_frame_master, current_frame_master = 0, 0
@@ -236,7 +239,6 @@ class OMXPlayerSync():
 
         if self.options.slave:
             acceleration = 0
-            wait_for_sync = False
             wait_after_sync = False
             deviations = collections.deque(maxlen=10)
             
@@ -246,8 +248,6 @@ class OMXPlayerSync():
         while True:
             if self.options.slave:
                 self.read_position_master()
-                if wait_for_sync:
-                    sync_timer = time()
 
             if not self.read_position_local():
                 self.increment_playlist_index()
@@ -256,19 +256,16 @@ class OMXPlayerSync():
             if self.hangup_detected():
                 break
 
-            if self.options.verbose or self.options.debug:
+            if self.options.verbose:
                 current_frame_local = math.modf(self.position_local)[0]*100/4
                 if self.options.slave:
                     current_frame_master = math.modf(self.position_master)[0]*100/4
 
             if self.options.master:
                 self.send_position_local()
-                if self.options.debug:
+                if self.options.verbose:
                     hh, mm, ss = _seconds_to_duration(self.position_local)
                     _print("{} ~ {:02d}:{:02d}:{:02d}/{}".format(self.filename, hh, mm, ss, int(current_frame_local)), end='\r')
-                elif self.options.verbose:
-                    sys.stdout.write("local: %.2f %.0f\n" %
-                        (self.position_local, current_frame_local))
 
             if self.options.slave:
                 if self.filename != self.filename_master:
@@ -280,19 +277,9 @@ class OMXPlayerSync():
                 median_deviation = self.median(list(deviations))
                 latest_deviation = deviations[-1]
 
-                if self.options.debug or self.options.verbose:
+                if self.options.verbose:
                     hh, mm, ss = _seconds_to_duration(self.position_local)
                     _print('{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}s {:10}'.format(self.filename, hh, mm, ss, median_deviation, '→' if acceleration > 0 else ('←' if acceleration < 0 else '⏺')), end='\r')
-
-                elif self.options.verbose:
-                    sys.stdout.write("local: %.2f %.0f master: %.2f %.0f deviation: %.2f median_deviation: %.2f filename: %s\n" % (
-                        self.position_local,
-                        current_frame_local,
-                        self.position_master,
-                        current_frame_master,
-                        deviation,
-                        median_deviation,
-                        self.filename))
 
                 if wait_after_sync:
                     if (time() - wait_after_sync) > SYNC_GRACE_TIME:
@@ -308,14 +295,13 @@ class OMXPlayerSync():
                 if abs(median_deviation) > SYNC_JUMP_AHEAD \
                 and self.position_local > SYNC_GRACE_TIME \
                 and self.position_master > SYNC_GRACE_TIME:
-                    if self.options.debug or self.options.verbose:
+                    if self.options.verbose:
                         print("")
                         hh, mm, ss = _seconds_to_duration(self.position_master)
                         _print('→ {:02d}:{:02d}:{:02d}'.format(hh, mm, ss))
                     if not self.controller.setPosition(self.position_master):
                         break
 
-                    wait_for_sync = True
                     wait_after_sync = time()
                     deviations.clear()
 
@@ -335,14 +321,16 @@ class OMXPlayerSync():
                 # OK, we are in sync
                 else:
 
-                    # Reset speed
+                    # Back to normal
                     if acceleration:
+                        
                         if acceleration > 0:
                             self.slow_down()
                         else:
                             self.speed_up()
                         
                         acceleration = 0
+                        wait_after_sync = time()
                         deviations.clear()
 
             if self.options.master:
