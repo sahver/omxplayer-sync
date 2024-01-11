@@ -32,8 +32,8 @@ except ImportError:
     DEVNULL = open(os.devnull, 'wb')
 
 SYNC_TOLERANCE = .1
-SYNC_GRACE_TIME = 10
-SYNC_JUMP_AHEAD = 3
+SYNC_GRACE_TIME = 1
+SYNC_JUMP_AHEAD = 1
 
 OMXPLAYER = 'omxplayer'
 OMXPLAYER_DBUS_ADDR='/tmp/omxplayerdbus.%s' % getpass.getuser()
@@ -94,12 +94,19 @@ class PlayerInterface():
             return True
         except Exception as e:
             _print("WARNING: dbus connection could not be established")
-            print(e)
-            sleep(5)
+#            print(e)
+#            sleep(5)
             return False
 
     def initialize(self):
-        sleep(10) # wait for omxplayer to appear on dbus
+        _print('initialize() begin')
+        while not self._get_dbus_interface():
+            sleep(0.1)
+#        sleep(10) # wait for omxplayer to appear on dbus
+        _print('initialize() dbus established')
+        while not self.Position():
+            sleep(0.1)
+        _print('initialize() end')
         return self._get_dbus_interface()
 
     def playPause(self):
@@ -236,6 +243,9 @@ class OMXPlayerSync():
             wait_for_sync = False
             wait_after_sync = False
             deviations = collections.deque(maxlen=10)
+            
+        if self.options.debug:
+            _print("")
 
         while True:
             if self.options.slave:
@@ -259,10 +269,10 @@ class OMXPlayerSync():
                 self.send_position_local()
                 if self.options.debug:
                     hh, mm, ss = _seconds_to_duration(self.position_local)
-                    if hh == 0 and mm == 0 and ss == 0:
-                        _print("")
-                    else:
-                        _print("{} ~ {:02d}:{:02d}:{:02d}/{}".format(self.filename, hh, mm, ss, int(current_frame_local)), end='\r')
+#                    if hh == 0 and mm == 0 and ss == 0:
+#                        _print("")
+#                    else:
+                    _print("{} ~ {:02d}:{:02d}:{:02d}/{}".format(self.filename, hh, mm, ss, int(current_frame_local)), end='\r')
                 elif self.options.verbose:
                     sys.stdout.write("local: %.2f %.0f\n" %
                         (self.position_local, current_frame_local))
@@ -278,10 +288,10 @@ class OMXPlayerSync():
 
                 if self.options.debug:
                     hh, mm, ss = _seconds_to_duration(self.position_master)
-                    if hh == 0 and mm == 0 and ss == 0:
-                        _print("")
-                    else:
-                        _print("{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}".format(self.filename, hh, mm, ss, abs(median_deviation)), end='\r')
+#                    if hh == 0 and mm == 0 and ss == 0:
+#                        _print("")
+#                    else:
+                    _print("{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}".format(self.filename, hh, mm, ss, abs(median_deviation)), end='\r')
 
                 elif self.options.verbose:
                     sys.stdout.write("local: %.2f %.0f master: %.2f %.0f deviation: %.2f median_deviation: %.2f filename: %s\n" % (
