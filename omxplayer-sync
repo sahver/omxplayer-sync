@@ -31,9 +31,10 @@ except ImportError:
     import os
     DEVNULL = open(os.devnull, 'wb')
 
-SYNC_TOLERANCE = .1
+SYNC_FREQ = 0.5
+SYNC_TOLERANCE = .05
 SYNC_GRACE_TIME = 3
-SYNC_JUMP_AHEAD = 1
+SYNC_JUMP = 1
 
 OMXPLAYER = 'omxplayer'
 OMXPLAYER_DBUS_ADDR='/tmp/omxplayerdbus.%s' % getpass.getuser()
@@ -167,7 +168,7 @@ class OMXPlayerSync():
         self.options, arguments = p.parse_args()
 
         for argument in arguments:
-            if argument.startswith('-'):
+            if argument.startswith('-') or not os.path.isfile(argument):
                 self.omxplayer_options.append(argument)
             else:
                 self.playlist.append(argument)
@@ -208,7 +209,7 @@ class OMXPlayerSync():
 
     def play_file(self, filename):
         if not os.path.isfile(filename):
-            if  self.options.debug:
+            if self.options.verbose:
                 _print("WARNING: %s file not found" % filename)
             self.increment_playlist_index()
             return
@@ -239,10 +240,10 @@ class OMXPlayerSync():
 
         if self.options.slave:
             acceleration = 0
-            wait_after_sync = False
+            last_sync = time()
             deviations = collections.deque(maxlen=10)
             
-        if self.options.debug:
+        if self.options.verbose:
             _print("")
 
         while True:
@@ -281,9 +282,13 @@ class OMXPlayerSync():
                     hh, mm, ss = _seconds_to_duration(self.position_local)
                     _print('{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}s {:10}'.format(self.filename, hh, mm, ss, median_deviation, '→' if acceleration > 0 else ('←' if acceleration < 0 else '⏺')), end='\r')
 
-                if wait_after_sync:
-                    if (time() - wait_after_sync) > SYNC_GRACE_TIME:
-                         wait_after_sync = False
+                #
+                # Grace time between syncs
+                #
+                    
+                if last_sync:
+                    if (time() - last_sync) > SYNC_GRACE_TIME:
+                         last_sync = False
 
                     continue
 
@@ -292,9 +297,7 @@ class OMXPlayerSync():
                 #
 
                 # Big diff, jump to proximity
-                if abs(median_deviation) > SYNC_JUMP_AHEAD \
-                and self.position_local > SYNC_GRACE_TIME \
-                and self.position_master > SYNC_GRACE_TIME:
+                if abs(median_deviation) > SYNC_JUMP:
                     if self.options.verbose:
                         print("")
                         hh, mm, ss = _seconds_to_duration(self.position_master)
@@ -302,13 +305,11 @@ class OMXPlayerSync():
                     if not self.controller.setPosition(self.position_master):
                         break
 
-                    wait_after_sync = time()
+                    last_sync = time()
                     deviations.clear()
 
                 # Small diff, compensate with speed
-                elif abs(latest_deviation) > SYNC_TOLERANCE \
-                and self.position_local > SYNC_GRACE_TIME \
-                and self.position_master > SYNC_GRACE_TIME:
+                elif abs(latest_deviation) > SYNC_TOLERANCE:
                     
                     if not acceleration:
                         if latest_deviation > 0:
@@ -321,7 +322,7 @@ class OMXPlayerSync():
                 # OK, we are in sync
                 else:
 
-                    # Back to normal
+                    # Sync finished, back to normal
                     if acceleration:
                         
                         if acceleration > 0:
@@ -330,11 +331,11 @@ class OMXPlayerSync():
                             self.speed_up()
                         
                         acceleration = 0
-                        wait_after_sync = time()
+                        last_sync = time()
                         deviations.clear()
 
             if self.options.master:
-                sleep(1)
+                sleep(SYNC_FREQ)
 
         self.kill_omxplayer()
 
