@@ -219,11 +219,6 @@ class OMXPlayerSync():
         self.position_local_oldage = 0.0
         self.position_local_oldage_count = 0
 
-        if self.options.verbose:
-            last_frame_local, current_frame_local = 0, 0
-            if self.options.slave:
-                last_frame_master, current_frame_master = 0, 0
-
         if self.options.master:
             self.send_position_local()
 
@@ -242,9 +237,9 @@ class OMXPlayerSync():
             acceleration = 0
             last_sync = time()
             deviations = collections.deque(maxlen=10)
-            
+
         if self.options.verbose:
-            _print("")
+            first_frame = True
 
         while True:
             if self.options.slave:
@@ -257,16 +252,16 @@ class OMXPlayerSync():
             if self.hangup_detected():
                 break
 
-            if self.options.verbose:
-                current_frame_local = math.modf(self.position_local)[0]*100/4
-                if self.options.slave:
-                    current_frame_master = math.modf(self.position_master)[0]*100/4
-
             if self.options.master:
                 self.send_position_local()
                 if self.options.verbose:
                     hh, mm, ss = _seconds_to_duration(self.position_local)
-                    _print("{} ~ {:02d}:{:02d}:{:02d}/{}".format(self.filename, hh, mm, ss, int(current_frame_local)), end='\r')
+                    if not ss and not mm and not hh:
+                        if first_frame:
+                            _print('{:100}'.format(self.filename))
+                            first_frame = False
+                    else: first_frame = True
+                    _print('{} ~ {:02d}:{:02d}:{:02d}'.format(self.filename, hh, mm, ss), end='\r')
 
             if self.options.slave:
                 if self.filename != self.filename_master:
@@ -280,7 +275,12 @@ class OMXPlayerSync():
 
                 if self.options.verbose:
                     hh, mm, ss = _seconds_to_duration(self.position_local)
-                    _print('{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}s {:10}'.format(self.filename, hh, mm, ss, median_deviation, '→' if acceleration > 0 else ('←' if acceleration < 0 else '⏺')), end='\r')
+                    if not ss and not mm and not hh:
+                        if first_frame:
+                            _print('{:100}'.format(self.filename))
+                            first_frame = False
+                    else: first_frame = True
+                    _print('{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}s {:10}'.format(self.filename, hh, mm, ss, median_deviation, '→' if acceleration > 0 else ('←' if acceleration < 0 else '⏵')), end='\r')
 
                 #
                 # Grace time between syncs
@@ -299,9 +299,9 @@ class OMXPlayerSync():
                 # Big diff, jump to proximity
                 if abs(median_deviation) > SYNC_JUMP:
                     if self.options.verbose:
-                        print("")
+                        _print('{} ~ {:02d}:{:02d}:{:02d} → '.format(self.filename, hh, mm, ss), end='')
                         hh, mm, ss = _seconds_to_duration(self.position_master)
-                        _print('→ {:02d}:{:02d}:{:02d}'.format(hh, mm, ss))
+                        print('{:02d}:{:02d}:{:02d} {:10}'.format(hh, mm, ss, ''))
                     if not self.controller.setPosition(self.position_master):
                         break
 
