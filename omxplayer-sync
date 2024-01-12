@@ -35,7 +35,7 @@ SYNC_FREQ = 0.5
 SYNC_TOLERANCE = .05
 SYNC_GRACE_TIME = 3
 SYNC_JUMP = 1
-SYNC_SMOOTHING = 3
+SYNC_SMOOTHING = 10
 
 OMXPLAYER = 'omxplayer'
 OMXPLAYER_DBUS_ADDR='/tmp/omxplayerdbus.%s' % getpass.getuser()
@@ -259,10 +259,11 @@ class OMXPlayerSync():
                     hh, mm, ss = _seconds_to_duration(self.position_local)
                     if not ss and not mm and not hh:
                         if first_frame:
-                            _print('{:100}'.format(self.filename))
+                            _print('{}{:33}'.format(self.filename, ''))
                             first_frame = False
-                    else: first_frame = True
-                    _print('{} ~ {:02d}:{:02d}:{:02d}'.format(self.filename, hh, mm, ss), end='\r')
+                    else:
+                        _print('{} ~ {:02d}:{:02d}:{:02d}'.format(self.filename, hh, mm, ss), end='\r')
+                        first_frame = True
 
             if self.options.slave:
                 if self.filename != self.filename_master:
@@ -278,10 +279,12 @@ class OMXPlayerSync():
                     hh, mm, ss = _seconds_to_duration(self.position_local)
                     if not ss and not mm and not hh:
                         if first_frame:
-                            _print('{:100}'.format(self.filename))
+                            _print('{}{:33}'.format(self.filename, ''))
                             first_frame = False
-                    else: first_frame = True
-                    _print('{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}s {:10}'.format(self.filename, hh, mm, ss, median_deviation, '→' if self.acceleration > 0 else ('←' if self.acceleration < 0 else '⏵')), end='\r')
+                    else:
+                        if not self.acceleration or not self.options.debug:
+                            _print('{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}s [{:d}] {:10}'.format(self.filename, hh, mm, ss, median_deviation, len(deviations), '→' if self.acceleration > 0 else ('←' if self.acceleration < 0 else '⏵')), end='\r')
+                        first_frame = True
 
                 #
                 # Grace time between syncs
@@ -299,45 +302,87 @@ class OMXPlayerSync():
 
                 # Big diff, jump to proximity
                 if abs(median_deviation) > SYNC_JUMP:
+
+                    if not self.controller.setPosition(self.position_master):
+                        break
+
+                    self.reset_speed()
+                    if self.options.debug:
+                        print('')
+                        print('')
+                        _print('[{:.3f} {} {}]'.format(median_deviation, 'jump, reset_speed()', self.acceleration))
+                        print('')
+                    last_sync = time()
+                    deviations.clear()
+
                     if self.options.verbose:
                         _print('{} ~ {:02d}:{:02d}:{:02d} → '.format(self.filename, hh, mm, ss), end='')
                         hh, mm, ss = _seconds_to_duration(self.position_master)
                         print('{:02d}:{:02d}:{:02d} {:10}'.format(hh, mm, ss, ''))
-                    if not self.controller.setPosition(self.position_master):
-                        break
-
-                    last_sync = time()
-                    deviations.clear()
 
                 # Small diff, compensate with speed
-                elif abs(median_deviation) > SYNC_TOLERANCE:
+                elif abs(median_deviation) > SYNC_TOLERANCE and not self.acceleration:
                     
-                    # Sync not in progress
-                    if not self.acceleration:
-                        if median_deviation > 0:
-                            self.speed_up()
-                        else:
-                            self.slow_down()
+                    if self.options.debug:
+                        print('')
+                        print('')
 
-                # OK, we are in sync
+                    # Start speed control
+                    if median_deviation > 0:
+                        self.speed_up()
+                        if self.options.debug:
+                            _print('[{:.3f} {} {}]'.format(median_deviation, 'speed_up()', self.acceleration))
+
+                    else:
+                        self.slow_down()
+                        if self.options.debug:
+                            _print('[{:.3f} {} {}]'.format(median_deviation, 'slow_down()', self.acceleration))
+
+                # Are we sync yet?
                 else:
 
-                    # Sync finished, back to normal
+                    # Speed control in progress
                     if self.acceleration:
-                        self.reset_speed()
-                        last_sync = time()
-                        deviations.clear()
+
+                        # If...
+                        if (
+                            # We have enought data to work with
+                            len(deviations) > 2
+                            and
+                            (
+                                # Last 2 deviations are with opposite signs,
+                                # then we have just crossed ground zero
+                                (deviations[-1] * deviations[-2]) < 0
+#                                or
+                                # Last deviation is bigger than the one before,
+                                # then we missed the ground zero
+#                                abs(deviations[-1]) > abs(deviations[-2])
+                            )
+                        ):
+                            self.reset_speed()
+                            if self.options.debug:
+                                _print('[{:.3f} ~ {:.3f} {:.3f} ~ {} {}]'.format(median_deviation, deviations[-1], deviations[-2], 'sync, reset_speed()', self.acceleration))
+                                print('')
+                            last_sync = time()
+                            deviations.clear()
+                        
+                        else:
+                            if self.options.debug:
+                                _print('[{:.3f} ~ {:.3f} {:.3f} ~ {} {}]'.format(median_deviation, deviations[-1], deviations[-2], self.acceleration, len(deviations)))
+                        # Endif
 
             if self.options.master:
                 sleep(SYNC_FREQ)
 
         self.kill_omxplayer()
+        if self.options.debug:
+            print('')
+            _print('[{:.3f} {} {}]'.format(median_deviation, 'end, reset_speed()', self.acceleration))
         self.reset_speed()
 
     def slow_down(self):
         self.process.stdin.write('1'.encode()) 
         self.acceleration = -1 if not self.acceleration else 0
-
 
     def speed_up(self):
         self.process.stdin.write('2'.encode())
@@ -346,7 +391,7 @@ class OMXPlayerSync():
     def reset_speed(self):
         if self.acceleration > 0:
             self.slow_down()
-        else:
+        elif self.acceleration < 0:
             self.speed_up()
 
     def read_position_local(self):
