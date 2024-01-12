@@ -35,6 +35,7 @@ SYNC_FREQ = 0.5
 SYNC_TOLERANCE = .05
 SYNC_GRACE_TIME = 3
 SYNC_JUMP = 1
+SYNC_SMOOTHING = 3
 
 OMXPLAYER = 'omxplayer'
 OMXPLAYER_DBUS_ADDR='/tmp/omxplayerdbus.%s' % getpass.getuser()
@@ -236,7 +237,7 @@ class OMXPlayerSync():
         if self.options.slave:
             acceleration = 0
             last_sync = time()
-            deviations = collections.deque(maxlen=10)
+            deviations = collections.deque(maxlen=SYNC_SMOOTHING)
 
         if self.options.verbose:
             first_frame = True
@@ -271,7 +272,7 @@ class OMXPlayerSync():
                 deviation = self.position_master - self.position_local
                 deviations.append(deviation)
                 median_deviation = self.median(list(deviations))
-                latest_deviation = deviations[-1]
+                #latest_deviation = deviations[-1]
 
                 if self.options.verbose:
                     hh, mm, ss = _seconds_to_duration(self.position_local)
@@ -309,10 +310,10 @@ class OMXPlayerSync():
                     deviations.clear()
 
                 # Small diff, compensate with speed
-                elif abs(latest_deviation) > SYNC_TOLERANCE:
+                elif abs(median_deviation) > SYNC_TOLERANCE:
                     
                     if not acceleration:
-                        if latest_deviation > 0:
+                        if median_deviation > 0:
                             acceleration = 1
                             self.speed_up()
                         else:
