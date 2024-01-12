@@ -153,6 +153,7 @@ class OMXPlayerSync():
         self.position_master = 0.0
         self.filename_master = ''
         self.process = None
+        self.acceleration = 0
 
         signal.signal(signal.SIGINT, self.kill_omxplayer_and_exit)
 
@@ -235,7 +236,6 @@ class OMXPlayerSync():
             self.kill_omxplayer_and_exit()
 
         if self.options.slave:
-            acceleration = 0
             last_sync = time()
             deviations = collections.deque(maxlen=SYNC_SMOOTHING)
 
@@ -281,7 +281,7 @@ class OMXPlayerSync():
                             _print('{:100}'.format(self.filename))
                             first_frame = False
                     else: first_frame = True
-                    _print('{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}s {:10}'.format(self.filename, hh, mm, ss, median_deviation, '→' if acceleration > 0 else ('←' if acceleration < 0 else '⏵')), end='\r')
+                    _print('{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}s {:10}'.format(self.filename, hh, mm, ss, median_deviation, '→' if self.acceleration > 0 else ('←' if self.acceleration < 0 else '⏵')), end='\r')
 
                 #
                 # Grace time between syncs
@@ -312,26 +312,19 @@ class OMXPlayerSync():
                 # Small diff, compensate with speed
                 elif abs(median_deviation) > SYNC_TOLERANCE:
                     
-                    if not acceleration:
+                    # Sync not in progress
+                    if not self.acceleration:
                         if median_deviation > 0:
-                            acceleration = 1
                             self.speed_up()
                         else:
-                            acceleration = -1
                             self.slow_down()
 
                 # OK, we are in sync
                 else:
 
                     # Sync finished, back to normal
-                    if acceleration:
-                        
-                        if acceleration > 0:
-                            self.slow_down()
-                        else:
-                            self.speed_up()
-                        
-                        acceleration = 0
+                    if self.acceleration:
+                        self.reset_speed()
                         last_sync = time()
                         deviations.clear()
 
@@ -339,12 +332,22 @@ class OMXPlayerSync():
                 sleep(SYNC_FREQ)
 
         self.kill_omxplayer()
+        self.reset_speed()
 
     def slow_down(self):
         self.process.stdin.write('1'.encode()) 
+        self.acceleration = -1 if not self.acceleration else 0
+
 
     def speed_up(self):
-        self.process.stdin.write('2'.encode()) 
+        self.process.stdin.write('2'.encode())
+        self.acceleration = 1 if not self.acceleration else 0
+
+    def reset_speed(self):
+        if self.acceleration > 0:
+            self.slow_down()
+        else:
+            self.speed_up()
 
     def read_position_local(self):
         position_local = self.controller.Position()
