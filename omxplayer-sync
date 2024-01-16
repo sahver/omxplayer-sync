@@ -17,6 +17,7 @@ import sys
 import math
 import socket
 import signal
+import subprocess
 import dbus
 import getpass
 import itertools
@@ -24,7 +25,6 @@ import collections
 from datetime import datetime
 from time import sleep, time
 from optparse import OptionParser, BadOptionError, AmbiguousOptionError
-from subprocess import Popen, PIPE
 try:
     from subprocess import DEVNULL
 except ImportError:
@@ -224,10 +224,10 @@ class OMXPlayerSync():
         if self.options.master:
             self.send_position_local()
 
-        self.process = Popen([OMXPLAYER] \
+        self.process = subprocess.Popen([OMXPLAYER] \
             + list(itertools.chain(*map(lambda x: x.split(' '), self.omxplayer_options))) \
             + [self.filename],
-            preexec_fn=os.setsid, stdout=PIPE, stderr=PIPE, stdin=PIPE, bufsize=0)
+            preexec_fn=os.setsid, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, bufsize=0)
         
         self.controller.initialize()
 
@@ -374,11 +374,17 @@ class OMXPlayerSync():
             if self.options.master:
                 sleep(SYNC_FREQ)
 
-        self.kill_omxplayer()
+        # Endwhile
+        if self.options.slave:
+            self.reset_speed()
+
         if self.options.debug:
             print('')
-            _print('[{:.3f} {} {}]'.format(median_deviation, 'end, reset_speed()', self.acceleration))
-        self.reset_speed()
+
+            if self.options.slave:
+                _print('[{:.3f} {} {}]'.format(median_deviation, 'end, reset_speed()', self.acceleration))
+
+        self.kill_omxplayer()
 
     def slow_down(self):
         self.process.stdin.write('1'.encode()) 
