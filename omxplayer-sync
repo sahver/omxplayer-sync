@@ -32,7 +32,7 @@ except ImportError:
     DEVNULL = open(os.devnull, 'wb')
 
 SYNC_FREQ = 0.5
-SYNC_TOLERANCE = .05
+SYNC_TOLERANCE = .03
 SYNC_GRACE_TIME = 3
 SYNC_JUMP = 1
 SYNC_SMOOTHING = 10
@@ -266,14 +266,15 @@ class OMXPlayerSync():
                         first_frame = True
 
             if self.options.slave:
-                if self.filename != self.filename_master:
-                    self.set_playlist_index()
-                    break
 
                 deviation = self.position_master - self.position_local
                 deviations.append(deviation)
                 median_deviation = self.median(list(deviations))
                 #latest_deviation = deviations[-1]
+
+                if self.filename != self.filename_master:
+                    self.set_playlist_index()
+                    break
 
                 if self.options.verbose:
                     hh, mm, ss = _seconds_to_duration(self.position_local)
