@@ -147,6 +147,7 @@ class OMXPlayerSync():
         self.playlist = []
         self.playlist_index = 0
         self.filename = ''
+        self.position_diff = 0.0
         self.position_local = 0.0
         self.position_local_oldage = 0.0
         self.position_local_oldage_count = 0
@@ -267,7 +268,7 @@ class OMXPlayerSync():
 
             if self.options.slave:
 
-                deviation = self.position_master - self.position_local
+                deviation = self.position_master - (self.position_local - self.position_diff)
                 deviations.append(deviation)
                 median_deviation = self.median(list(deviations))
                 #latest_deviation = deviations[-1]
@@ -277,14 +278,14 @@ class OMXPlayerSync():
                     break
 
                 if self.options.verbose:
-                    hh, mm, ss = _seconds_to_duration(self.position_local)
+                    hh, mm, ss = _seconds_to_duration(self.position_local - self.position_diff)
                     if not ss and not mm and not hh:
                         if first_frame:
                             _print('{}{:33}'.format(self.filename, ''))
                             first_frame = False
                     else:
                         if not self.acceleration or not self.options.debug:
-                            _print('{} ~ {:02d}:{:02d}:{:02d} ~ {:.3f}s [{:d}] {:10}'.format(self.filename, hh, mm, ss, median_deviation, len(deviations), '→' if self.acceleration > 0 else ('←' if self.acceleration < 0 else '⏵')), end='\r')
+                            _print('{} ~ {:02d}:{:02d}:{:02d}{} ~ {:.3f}s [{:d}] {:10}'.format(self.filename, hh, mm, ss, f' {self.position_diff:+.1f}s' if self.position_diff != 0 else '', median_deviation, len(deviations), '→' if self.acceleration > 0 else ('←' if self.acceleration < 0 else '⏵')), end='\r')
                         first_frame = True
 
                 #
@@ -304,7 +305,7 @@ class OMXPlayerSync():
                 # Big diff, jump to proximity
                 if abs(median_deviation) > SYNC_JUMP:
 
-                    if not self.controller.setPosition(self.position_master):
+                    if not self.controller.setPosition(self.position_master + self.position_diff):
                         break
 
                     self.reset_speed()
@@ -319,7 +320,7 @@ class OMXPlayerSync():
                     if self.options.verbose:
                         _print('{} ~ {:02d}:{:02d}:{:02d} → '.format(self.filename, hh, mm, ss), end='')
                         hh, mm, ss = _seconds_to_duration(self.position_master)
-                        print('{:02d}:{:02d}:{:02d} {:10}'.format(hh, mm, ss, ''))
+                        print('{:02d}:{:02d}:{:02d}{} {:10}'.format(hh, mm, ss, f' {self.position_diff:+.1f}s' if self.position_diff != 0 else '', ''))
 
                 # Small diff, compensate with speed
                 elif abs(median_deviation) > SYNC_TOLERANCE and not self.acceleration:
@@ -480,9 +481,15 @@ class OMXPlayerSync():
     # slave specific
     #
     def read_position_master(self):
-        data = self.sock.recvfrom(1024)[0].decode('utf-8').split('%', 1)
-        self.position_master = float(data[0])
-        self.filename_master = data[1]
+        data = self.sock.recvfrom(1024)[0].decode('utf-8')
+        # Protocol
+        if data.startswith('d='):
+            data = data.split('=', 1)
+            self.position_diff = float(data[1])
+        else:
+            data = data.split('%', 1)
+            self.position_master = float(data[0])
+            self.filename_master = data[1]
 
     def median(self, lst):
         quotient, remainder = divmod(len(lst), 2)
