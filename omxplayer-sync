@@ -103,7 +103,7 @@ class PlayerInterface():
     def initialize(self):
         while not self._get_dbus_interface():
             sleep(0.1)
-        while not self.Position():
+        while not self.getPosition():
             sleep(0.1)
         return self._get_dbus_interface()
 
@@ -113,6 +113,14 @@ class PlayerInterface():
             return True
         except:
             print(e)
+            return False
+
+    def getDuration(self):
+        try:
+            return self.properties.Get(
+                'org.mpris.MediaPlayer2.Player',
+                'Duration')
+        except Exception as e:
             return False
 
     def setPosition(self, seconds):
@@ -126,7 +134,7 @@ class PlayerInterface():
 
         return True
 
-    def Position(self):
+    def getPosition(self):
         try:
             return self.properties.Get(
                 'org.mpris.MediaPlayer2.Player',
@@ -239,6 +247,7 @@ class OMXPlayerSync():
         if self.options.slave:
             last_sync = time()
             deviations = collections.deque(maxlen=SYNC_SMOOTHING)
+            duration = float(self.controller.getDuration())/1000000
 
         if self.options.verbose:
             first_frame = True
@@ -268,7 +277,7 @@ class OMXPlayerSync():
 
             if self.options.slave:
 
-                deviation = self.position_master - (self.position_local - self.position_diff)
+                deviation = (self.position_master + self.position_diff) % duration - self.position_local
                 deviations.append(deviation)
                 median_deviation = self.median(list(deviations))
                 #latest_deviation = deviations[-1]
@@ -278,14 +287,16 @@ class OMXPlayerSync():
                     break
 
                 if self.options.verbose:
-                    hh, mm, ss = _seconds_to_duration(self.position_local - self.position_diff)
+                    hh, mm, ss = _seconds_to_duration(self.position_local)
                     if not ss and not mm and not hh:
                         if first_frame:
-                            _print('{}{:33}'.format(self.filename, ''))
+                            _print('{}{:40}'.format(self.filename, ''))
                             first_frame = False
                     else:
                         if not self.acceleration or not self.options.debug:
-                            _print('{} ~ {:02d}:{:02d}:{:02d}{} ~ {:.3f}s [{:d}] {:10}'.format(self.filename, hh, mm, ss, f' {self.position_diff:+.1f}s' if self.position_diff != 0 else '', median_deviation, len(deviations), '→' if self.acceleration > 0 else ('←' if self.acceleration < 0 else '⏵')), end='\r')
+                            if self.position_diff:
+                                hhh, mmm, sss = _seconds_to_duration(self.position_master)
+                            _print('{} ~ {}{:02d}:{:02d}:{:02d} ~ {:.3f}s [{:d}] {:10}'.format(self.filename, '' if not self.position_diff else f'{hhh:02}:{mmm:02}:{sss:02} {self.position_diff:+.1f}s ', hh, mm, ss, median_deviation, len(deviations), '→' if self.acceleration > 0 else ('←' if self.acceleration < 0 else '⏵')), end='\r')
                         first_frame = True
 
                 #
@@ -305,7 +316,7 @@ class OMXPlayerSync():
                 # Big diff, jump to proximity
                 if abs(median_deviation) > SYNC_JUMP:
 
-                    if not self.controller.setPosition(self.position_master + self.position_diff):
+                    if not self.controller.setPosition((self.position_master + self.position_diff) % duration):
                         break
 
                     self.reset_speed()
@@ -403,7 +414,7 @@ class OMXPlayerSync():
             self.speed_up()
 
     def read_position_local(self):
-        position_local = self.controller.Position()
+        position_local = self.controller.getPosition()
         if position_local:
             self.position_local = float(position_local)/1000000
         else:
