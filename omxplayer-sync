@@ -18,6 +18,7 @@ import math
 import socket
 import signal
 import subprocess
+import threading
 import dbus
 import getpass
 import itertools
@@ -158,12 +159,21 @@ class PlayerInterface():
         except Exception as e:
             return False
 
+    def isPlaying(self):
+        try:
+            return self.properties.Get(
+                'org.mpris.MediaPlayer2.Player',
+                'PlaybackStatus') == 'Playing'
+        except Exception as e:
+            return None
+
 #
 # OMXPlayer-Sync main class
 #
 class OMXPlayerSync():
     def __init__(self):
         self.sock = self.init_socket()
+        self.broadcast = self.init_broadcast()
         self.controller = PlayerInterface()
 
         self.options = None
@@ -222,11 +232,15 @@ class OMXPlayerSync():
             self.omxplayer_options.append('--no-osd')
 
         if self.options.master:
-            self.socket_enable_broadcast()
-            self.socket_connect(self.options.destination)
+#            self.socket_enable_broadcast()
+#            self.socket_connect(self.options.destination)
+            self.broadcast_connect(self.options.destination)
+
+        # Blocking -> Non-blocking
+        threading.Thread(target=self.read_broadcasts, args=[]).start()
 
         if self.options.slave:
-            self.read_position_master()
+#            self.read_position_master()
             self.set_playlist_index()
 
         while True:
@@ -247,7 +261,7 @@ class OMXPlayerSync():
         self.position_local_oldage_count = 0
 
         if self.options.master:
-            self.send_position_local()
+            self.broadcast_position_local()
 
         self.process = subprocess.Popen([OMXPLAYER] \
             + list(itertools.chain(*map(lambda x: x.split(' '), self.omxplayer_options))) \
@@ -269,8 +283,14 @@ class OMXPlayerSync():
             first_frame = True
 
         while True:
-            if self.options.slave:
-                self.read_position_master()
+
+            sleep(SYNC_FREQ)
+
+            if not self.controller.isPlaying():
+                continue
+
+#            if self.options.slave:
+#                self.read_position_master()
 
             if not self.read_position_local():
                 self.increment_playlist_index()
@@ -280,7 +300,7 @@ class OMXPlayerSync():
                 break
 
             if self.options.master:
-                self.send_position_local()
+                self.broadcast_position_local()
                 if self.options.verbose:
                     hh, mm, ss = _seconds_to_duration(self.position_local)
                     if not ss and not mm and not hh:
@@ -400,8 +420,8 @@ class OMXPlayerSync():
                                 _print('[{:.3f} ~ {:.3f} {:.3f} ~ {} {}]'.format(median_deviation, deviations[-1], deviations[-2], self.acceleration, len(deviations)))
                         # Endif
 
-            if self.options.master:
-                sleep(SYNC_FREQ)
+#            if self.options.master:
+#                sleep(SYNC_FREQ)
 
         # Endwhile
         if self.options.slave:
@@ -488,6 +508,24 @@ class OMXPlayerSync():
     #
     # master specific
     #
+    def init_broadcast(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        return sock
+
+    def broadcast_connect(self, destination):
+        try:
+            self.broadcast.connect((destination, PORT))
+        except:
+            _print("connect: Network is unreachable")
+            pass
+
+    def broadcast_position_local(self):
+        try:
+            self.broadcast.send(("%s%%%s" % (str(self.position_local),  self.filename)).encode('utf-8'))
+        except socket.error:
+            pass
+
     def socket_enable_broadcast(self):
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
@@ -504,31 +542,48 @@ class OMXPlayerSync():
         except socket.error:
             pass
 
+
     #
     # slave specific
     #
     def read_position_master(self):
-        data = self.sock.recvfrom(1024)[0].decode('utf-8')
-        # Protocol
-        if data.startswith('%'):
-            if data.startswith('%diff='):
-                data = data.split('=', 1)
-                self.position_diff = float(data[1])
-            elif data.startswith('%play'):
-                self.controller.play()
-            elif data.startswith('%pause'):
-                self.controller.pause()
-        # Position
-        else:
-            data = data.split('%', 1)
-            self.position_master = float(data[0])
-            self.filename_master = data[1]
+        data = self.sock.recvfrom(1024)[0].decode('utf-8').split('%', 1)
+        self.position_master = float(data[0])
+        self.filename_master = data[1]
 
     def median(self, lst):
         quotient, remainder = divmod(len(lst), 2)
         if remainder:
             return sorted(lst)[quotient]
         return float(sum(sorted(lst)[quotient - 1:quotient + 1]) / 2.0)
+
+    #
+    # for both
+    #
+
+    def read_broadcasts(self):
+
+        while True:
+
+            # Wait
+            data = self.sock.recvfrom(1024)[0].decode('utf-8')
+
+            # Protocol
+            if data.startswith('%'):
+                if data.startswith('%diff='):
+                    if self.options.slave:
+                        data = data.split('=', 1)
+                        self.position_diff = float(data[1])
+                elif data.startswith('%play'):
+                    self.controller.play()
+                elif data.startswith('%pause'):
+                    self.controller.pause()
+
+            # Position
+            elif self.options.slave:
+                data = data.split('%', 1)
+                self.position_master = float(data[0])
+                self.filename_master = data[1]
 
 if __name__ == '__main__':
     OMXPlayerSync().run()
