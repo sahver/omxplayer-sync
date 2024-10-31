@@ -190,6 +190,8 @@ class OMXPlayerSync():
         self.process = None
         self.acceleration = 0
 
+        self.update = threading.Event()
+
         signal.signal(signal.SIGINT, self.kill_omxplayer_and_exit)
 
     def run(self):
@@ -232,15 +234,12 @@ class OMXPlayerSync():
             self.omxplayer_options.append('--no-osd')
 
         if self.options.master:
-#            self.socket_enable_broadcast()
-#            self.socket_connect(self.options.destination)
             self.broadcast_connect(self.options.destination)
 
         # Blocking -> Non-blocking
         threading.Thread(target=self.read_broadcasts, args=[]).start()
 
         if self.options.slave:
-#            self.read_position_master()
             self.set_playlist_index()
 
         while True:
@@ -284,13 +283,9 @@ class OMXPlayerSync():
 
         while True:
 
-            sleep(SYNC_FREQ)
-
-            if not self.controller.isPlaying():
-                continue
-
-#            if self.options.slave:
-#                self.read_position_master()
+            if self.options.slave:
+                self.update.wait()
+                self.update.clear()
 
             if not self.read_position_local():
                 self.increment_playlist_index()
@@ -300,7 +295,8 @@ class OMXPlayerSync():
                 break
 
             if self.options.master:
-                self.broadcast_position_local()
+                if self.controller.isPlaying():
+                    self.broadcast_position_local()
                 if self.options.verbose:
                     hh, mm, ss = _seconds_to_duration(self.position_local)
                     if not ss and not mm and not hh:
@@ -420,8 +416,8 @@ class OMXPlayerSync():
                                 _print('[{:.3f} ~ {:.3f} {:.3f} ~ {} {}]'.format(median_deviation, deviations[-1], deviations[-2], self.acceleration, len(deviations)))
                         # Endif
 
-#            if self.options.master:
-#                sleep(SYNC_FREQ)
+            if self.options.master:
+                sleep(SYNC_FREQ)
 
         # Endwhile
         if self.options.slave:
@@ -584,6 +580,7 @@ class OMXPlayerSync():
                 data = data.split('%', 1)
                 self.position_master = float(data[0])
                 self.filename_master = data[1]
+                self.update.set()
 
 if __name__ == '__main__':
     OMXPlayerSync().run()
