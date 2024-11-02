@@ -566,6 +566,8 @@ class OMXPlayerSync():
 
             # Protocol
             if data.startswith('%'):
+                if data.startswith('%hello='):
+                    pass
                 if data.startswith('%diff='):
                     if self.options.slave:
                         data = data.split('=', 1)
