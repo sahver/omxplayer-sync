@@ -562,20 +562,27 @@ class OMXPlayerSync():
         while True:
 
             # Wait
-            data = self.sock.recvfrom(1024)[0].decode('utf-8')
+            data, sender = self.sock.recvfrom(1024)
+            data = data.decode('utf-8')
 
             # Protocol
             if data.startswith('%'):
+
+                # Parse
                 if data.startswith('%hello='):
                     pass
                 if data.startswith('%diff='):
                     if self.options.slave:
-                        data = data.split('=', 1)
-                        self.position_diff = float(data[1])
+                        key, val = data.split('=', 1)
+                        self.position_diff = float(val)
+                        _print(f'Diff={self.position_diff:.1f}')
                 elif data.startswith('%play'):
                     self.controller.play()
                 elif data.startswith('%pause'):
                     self.controller.pause()
+
+                # Confirm received
+                self.sock.sendto(f'OK {data}'.encode('utf-8'), sender)
 
             # Position
             elif self.options.slave:
