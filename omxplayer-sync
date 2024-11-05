@@ -575,7 +575,7 @@ class OMXPlayerSync():
                     if self.options.slave:
                         key, val = data.split('=', 1)
                         self.position_diff = float(val)
-                        _print(f'Diff={self.position_diff:.1f}')
+                        _print(f'Diff set to {self.position_diff:.1f}s')
                 elif data.startswith('%play'):
                     self.controller.play()
                 elif data.startswith('%pause'):
