@@ -484,6 +484,7 @@ class OMXPlayerSync():
 
     def init_socket(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(('0.0.0.0', PORT))
         return sock
 
@@ -559,37 +560,72 @@ class OMXPlayerSync():
 
     def read_broadcasts(self):
 
+        timeout = SYNC_FREQ * 10
+        timeout_count = 0
+        timeout_retry = 5
+
+        # Timeout only for followers
+        if self.options.slave:
+            self.sock.settimeout(timeout)
+
         while True:
 
-            # Wait
-            data, sender = self.sock.recvfrom(1024)
-            data = data.decode('utf-8')
+            try:
+                # Wait for sync data
+                data, sender = self.sock.recvfrom(1024)
+                data = data.decode('utf-8')
 
-            # Protocol
-            if data.startswith('%'):
+                #
+                # All good!
+                #
 
-                # Parse
-                if data.startswith('%hello='):
-                    pass
-                if data.startswith('%diff='):
+                # Reset
+                timeout_count = 0
+
+                # Protocol
+                if data.startswith('%'):
+
+                    # Parse
+                    if data.startswith('%hello='):
+                        pass
+                    if data.startswith('%diff='):
+                        if self.options.slave:
+                            key, val = data.split('=', 1)
+                            self.position_diff = float(val)
+                            _print(f'Diff set to {self.position_diff:.1f}s')
+                    elif data.startswith('%play'):
+                        self.controller.play()
+                    elif data.startswith('%pause'):
+                        self.controller.pause()
+
+                    # Confirm received
+                    self.sock.sendto(f'OK {data}'.encode('utf-8'), sender)
+
+                # Position
+                elif self.options.slave:
+                    data = data.split('%', 1)
+                    self.position_master = float(data[0])
+                    self.filename_master = data[1]
+                    self.update.set()
+
+            # Should have received something by now
+            except socket.timeout:
+
+                timeout_count += 1
+
+                # Problems, reopen socket
+                if timeout_count >= timeout_retry:
+                    _print(f'WARNING: should have received timing from primary by now')
+                    _print(f'WARNING: closing and re-opening socket')
+                    self.sock.close()
+                    self.sock = self.init_socket()
+
+                    # Timeout only for followers
                     if self.options.slave:
-                        key, val = data.split('=', 1)
-                        self.position_diff = float(val)
-                        _print(f'Diff set to {self.position_diff:.1f}s')
-                elif data.startswith('%play'):
-                    self.controller.play()
-                elif data.startswith('%pause'):
-                    self.controller.pause()
+                        self.sock.settimeout(timeout)
 
-                # Confirm received
-                self.sock.sendto(f'OK {data}'.encode('utf-8'), sender)
-
-            # Position
-            elif self.options.slave:
-                data = data.split('%', 1)
-                self.position_master = float(data[0])
-                self.filename_master = data[1]
-                self.update.set()
+                    # Reset
+                    timeout_count = 0
 
 if __name__ == '__main__':
     OMXPlayerSync().run()
