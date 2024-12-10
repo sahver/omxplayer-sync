@@ -191,6 +191,7 @@ class OMXPlayerSync():
         self.acceleration = 0
 
         self.update = threading.Event()
+        self.quit = threading.Event()
 
         signal.signal(signal.SIGINT, self.kill_omxplayer_and_exit)
 
@@ -298,7 +299,7 @@ class OMXPlayerSync():
                     self.update.clear()
                 # Timeout expired, do not block
                 else:
-                    _print('WARNING: unable to get current playback time from primary') 
+                    _print(f'WARNING: unable to get playback time from primary{"":<25}') 
                     continue
 
             if self.options.master:
@@ -499,6 +500,9 @@ class OMXPlayerSync():
         return sock
 
     def kill_omxplayer(self):
+
+        self.quit.set()
+
         try:
             os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
         except:
@@ -525,13 +529,14 @@ class OMXPlayerSync():
             self.broadcast.connect((destination, PORT))
         except:
             _print("connect: Network is unreachable")
-            pass
+#            pass
 
     def broadcast_position_local(self):
         try:
             self.broadcast.send(("%s%%%s" % (str(self.position_local),  self.filename)).encode('utf-8'))
-        except socket.error:
-            pass
+        except socket.error as e:
+            _print(f'WARNING: socket.error while broadcasting --> {e}')
+#            pass
 
     def socket_enable_broadcast(self):
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -580,6 +585,9 @@ class OMXPlayerSync():
 
         while True:
 
+            if self.quit.is_set():
+                break
+
             try:
                 # Wait for sync data
                 data, sender = self.sock.recvfrom(1024)
@@ -625,7 +633,7 @@ class OMXPlayerSync():
 
                 # Problems, reopen socket
                 if timeout_count >= timeout_retry:
-                    _print(f'WARNING: unable to get current playback time from primary (retries={timeout_retry})')
+                    _print(f'WARNING: unable to get playback time from primary (retries={timeout_retry})')
                     self.sock.close()
                     self.sock = self.init_socket()
                     _print(f'WARNING: closed and re-opened socket')
