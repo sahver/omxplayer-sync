@@ -283,21 +283,23 @@ class OMXPlayerSync():
 
         while True:
 
+            if not self.read_position_local():
+                self.increment_playlist_index()
+                _print('BREAK: not self.read_position_local()')
+                break
+
+            if self.hangup_detected():
+                _print('BREAK: self.hangup_detected()')
+                break
+
             if self.options.slave:
                 # Wait for sync data from primary
                 if self.update.wait(timeout=(SYNC_FREQ*2)):
                     self.update.clear()
                 # Timeout expired, do not block
                 else:
-                    _print('WARNING: sync data wait from primary expired') 
+                    _print('WARNING: unable to get current playback time from primary') 
                     continue
-
-            if not self.read_position_local():
-                self.increment_playlist_index()
-                break
-
-            if self.hangup_detected():
-                break
 
             if self.options.master:
                 if self.controller.isPlaying():
@@ -321,6 +323,7 @@ class OMXPlayerSync():
 
                 if self.filename != self.filename_master:
                     self.set_playlist_index()
+                    _print('BREAK: self.filename != self.filename_master')
                     break
 
                 if self.options.verbose:
@@ -354,6 +357,7 @@ class OMXPlayerSync():
                 if abs(median_deviation) > SYNC_JUMP:
 
                     if not self.controller.setPosition((self.position_master + self.position_diff) % duration):
+                        _print('BREAK: not self.controller.setPosition((self.position_master + self.position_diff) % duration)')
                         break
 
                     self.reset_speed()
@@ -434,6 +438,7 @@ class OMXPlayerSync():
             if self.options.slave:
                 _print('[{:.3f} {} {}]'.format(median_deviation, 'end, reset_speed()', self.acceleration))
 
+        _print('BREAK: endwhile, self.kill_omxplayer()')
         self.kill_omxplayer()
 
     def slow_down(self):
@@ -620,7 +625,7 @@ class OMXPlayerSync():
 
                 # Problems, reopen socket
                 if timeout_count >= timeout_retry:
-                    _print(f'WARNING: should have received timing from primary by now')
+                    _print(f'WARNING: unable to get current playback time from primary (retries={timeout_retry})')
                     self.sock.close()
                     self.sock = self.init_socket()
                     _print(f'WARNING: closed and re-opened socket')
