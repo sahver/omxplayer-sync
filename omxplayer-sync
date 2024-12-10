@@ -284,8 +284,13 @@ class OMXPlayerSync():
         while True:
 
             if self.options.slave:
-                self.update.wait()
-                self.update.clear()
+                # Wait for sync data from primary
+                if self.update.wait(timeout=(SYNC_FREQ*2)):
+                    self.update.clear()
+                # Timeout expired, do not block
+                else:
+                    _print('WARNING: sync data wait from primary expired') 
+                    continue
 
             if not self.read_position_local():
                 self.increment_playlist_index()
@@ -616,9 +621,9 @@ class OMXPlayerSync():
                 # Problems, reopen socket
                 if timeout_count >= timeout_retry:
                     _print(f'WARNING: should have received timing from primary by now')
-                    _print(f'WARNING: closing and re-opening socket')
                     self.sock.close()
                     self.sock = self.init_socket()
+                    _print(f'WARNING: closed and re-opened socket')
 
                     # Timeout only for followers
                     if self.options.slave:
