@@ -38,6 +38,9 @@ SYNC_GRACE_TIME = 3
 SYNC_JUMP = 1
 SYNC_SMOOTHING = 10
 
+SYNC_NETWORK_GRACE_TIME = SYNC_FREQ * 2
+SYNC_NETWORK_TIMEOUT = SYNC_NETWORK_GRACE_TIME * 10
+
 OMXPLAYER = 'omxplayer'
 OMXPLAYER_DBUS_ADDR='/tmp/omxplayerdbus.%s' % getpass.getuser()
 PORT = 1666
@@ -275,6 +278,7 @@ class OMXPlayerSync():
             self.kill_omxplayer_and_exit()
 
         if self.options.slave:
+            last_update = time()
             last_sync = time()
             deviations = collections.deque(maxlen=SYNC_SMOOTHING)
             duration = float(self.controller.getDuration())/1000000
@@ -295,9 +299,17 @@ class OMXPlayerSync():
 
             if self.options.slave:
                 # Wait for sync data from primary
-                if self.update.wait(timeout=(SYNC_FREQ*2)):
+                if self.update.wait(timeout=(SYNC_NETWORK_GRACE_TIME)):
                     self.update.clear()
-                # Timeout expired, do not block
+                    last_update = time()
+                # Timeout expired, try to re-connect
+                elif (time() - last_update) > SYNC_NETWORK_TIMEOUT:
+                    _print(f'WARNING: there is an issue with connection to primary, trying to re-connect..')
+                    self.sock.close()
+                    self.sock = self.init_socket()
+                    last_update = time()
+                    continue
+                # Timeout, but give it some time to recover, do not block
                 else:
                     _print(f'WARNING: unable to get playback time from primary{"":<25}') 
                     continue
@@ -576,78 +588,79 @@ class OMXPlayerSync():
 
     def read_broadcasts(self):
 
-        timeout = SYNC_FREQ * 5
-        timeout_count = 0
-        timeout_retry = 5
+#        timeout = SYNC_FREQ * 5
+#        timeout_count = 0
+#        timeout_retry = 5
 
         # Timeout only for followers
-        if self.options.slave:
-            self.sock.settimeout(timeout)
+#        if self.options.slave:
+#            self.sock.settimeout(timeout)
 
         while True:
 
+            # Quit signal
             if self.quit.is_set():
                 break
 
-            try:
-                # Wait for sync data
-                data, sender = self.sock.recvfrom(1024)
-                data = data.decode('utf-8')
+ #           try:
+            # Wait for sync data
+            data, sender = self.sock.recvfrom(1024)
+            data = data.decode('utf-8')
 
-                print('')
-                print(data)
+            print('')
+            print(data)
 
                 #
                 # All good!
                 #
 
                 # Reset
-                timeout_count = 0
+#                timeout_count = 0
 
-                # Protocol
-                if data.startswith('%'):
+            # Protocol
+            if data.startswith('%'):
 
-                    # Parse
-                    if data.startswith('%hello='):
-                        pass
-                    if data.startswith('%diff='):
-                        if self.options.slave:
-                            key, val = data.split('=', 1)
-                            self.position_diff = float(val)
-                            _print(f'Diff set to {self.position_diff:.1f}s')
-                    elif data.startswith('%play'):
-                        self.controller.play()
-                    elif data.startswith('%pause'):
-                        self.controller.pause()
+                # Parse
+                if data.startswith('%hello='):
+                    pass
+                if data.startswith('%diff='):
+                    if self.options.slave:
+                        key, val = data.split('=', 1)
+                        self.position_diff = float(val)
+                        _print(f'Diff set to {self.position_diff:.1f}s')
+                elif data.startswith('%play'):
+                    self.controller.play()
+                elif data.startswith('%pause'):
+                    self.controller.pause()
 
-                    # Confirm received
-                    self.sock.sendto(f'OK {data}'.encode('utf-8'), sender)
+                # Confirm received
+                self.sock.sendto(f'OK {data}'.encode('utf-8'), sender)
 
-                # Position
-                elif self.options.slave:
-                    data = data.split('%', 1)
-                    self.position_master = float(data[0])
-                    self.filename_master = data[1]
-                    self.update.set()
+            # Sync
+            elif self.options.slave:
+                data = data.split('%', 1)
+                self.position_master = float(data[0])
+                self.filename_master = data[1]
+                self.update.set()
 
             # Should have received something by now
-            except socket.timeout:
+#            except socket.timeout:
 
-                timeout_count += 1
+#                timeout_count += 1
 
                 # Problems, reopen socket
-                if timeout_count >= timeout_retry:
-                    _print(f'WARNING: unable to get playback time from primary (retries={timeout_retry})')
-                    self.sock.close()
-                    self.sock = self.init_socket()
-                    _print(f'WARNING: closed and re-opened socket')
+#                if timeout_count >= timeout_retry:
+#                    _print(f'WARNING: unable to get playback time from primary (retries={timeout_retry})')
+#                    self.sock.close()
+#                    self.sock = self.init_socket()
+#                    _print(f'WARNING: closed and re-opened socket')
 
                     # Timeout only for followers
-                    if self.options.slave:
-                        self.sock.settimeout(timeout)
+#                    if self.options.slave:
+#                        self.sock.settimeout(timeout)
 
                     # Reset
-                    timeout_count = 0
+#                    timeout_count = 0
 
 if __name__ == '__main__':
     OMXPlayerSync().run()
