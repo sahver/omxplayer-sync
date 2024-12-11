@@ -500,7 +500,7 @@ class OMXPlayerSync():
         return sock
 
     def kill_omxplayer(self):
-
+        _print('kill_omxplayer()')
         self.quit.set()
 
         try:
@@ -513,6 +513,7 @@ class OMXPlayerSync():
             pass
 
     def kill_omxplayer_and_exit(self, *args):
+        _print('kill_omxplayer_and_exit()')
         self.kill_omxplayer()
         sys.exit(0)
 
@@ -575,7 +576,7 @@ class OMXPlayerSync():
 
     def read_broadcasts(self):
 
-        timeout = SYNC_FREQ * 10
+        timeout = SYNC_FREQ * 5
         timeout_count = 0
         timeout_retry = 5
 
@@ -592,6 +593,9 @@ class OMXPlayerSync():
                 # Wait for sync data
                 data, sender = self.sock.recvfrom(1024)
                 data = data.decode('utf-8')
+
+                print('')
+                print(data)
 
                 #
                 # All good!
