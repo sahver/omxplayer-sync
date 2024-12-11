@@ -305,6 +305,7 @@ class OMXPlayerSync():
                 # Timeout expired, try to re-connect
                 elif (time() - last_update) > SYNC_NETWORK_TIMEOUT:
                     _print(f'WARNING: there is an issue with connection to primary, trying to re-connect..')
+                    self.sock.shutdown(socket.SHUT_RDWR)
                     self.sock.close()
                     self.sock = self.init_socket()
                     last_update = time()
