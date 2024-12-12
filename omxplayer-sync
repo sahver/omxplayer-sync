@@ -294,9 +294,15 @@ class OMXPlayerSync():
         while True:
 
             if not self.read_position_local():
-                self.increment_playlist_index()
-                _print('BREAK: not self.read_position_local()')
-                break
+                # During looping it can return False for a monement,
+                # so give a second change after a brief moment
+                _print('WARNING: not self.read_position_local()')
+                sleep(SYNC_FREQ)
+                # Try again
+                if not self.read_position_local():
+                    self.increment_playlist_index()
+                    _print('BREAK: not self.read_position_local()')
+                    break
 
             if self.hangup_detected():
                 _print('BREAK: self.hangup_detected()')
@@ -477,6 +483,7 @@ class OMXPlayerSync():
         if position_local:
             self.position_local = float(position_local)/1000000
         else:
+            _print(f'WARNING: unable to get local position --> "{position_local}"')
             return False
 
         return True
@@ -523,7 +530,7 @@ class OMXPlayerSync():
             try:
                 self.sock.shutdown(socket.SHUT_RDWR)
             except OSError as e:
-                _print(f'WARNING: {e}')
+                _print(f'ERROR: init_socket(): {e}')
             finally:
                 self.sock.close()
 
@@ -568,7 +575,7 @@ class OMXPlayerSync():
 
         # Close and free existing
         if isinstance(self.broadcast, socket.socket):
-            _print('WARNING: Closing previously used socket')
+            _print('WARNING: Closing previously used broadcast socket')
             self.broadcast.shutdown(socket.SHUT_RDWR)
             self.broadcast.close()
 
@@ -586,7 +593,7 @@ class OMXPlayerSync():
         try:
             self.broadcast.send(("%s%%%s" % (str(self.position_local),  self.filename)).encode('utf-8'))
         except socket.error as e:
-            _print(f'WARNING: socket.error while broadcasting --> {e}')
+            _print(f'ERROR: socket.error while broadcasting --> {e}')
 
     #
     # slave specific
@@ -661,7 +668,7 @@ class OMXPlayerSync():
                         self.update.set()
 
             except Exception as e:
-                _print(f'WARNING: {e}')
+                _print(f'ERROR: read_broadcasts(): {e}')
 
             # Should have received something by now
 #            except socket.timeout:
