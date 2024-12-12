@@ -178,7 +178,7 @@ class OMXPlayerSync():
 
         self.sock = None
         self.broadcast = None
-        
+
         self.controller = PlayerInterface()
 
         self.options = None
@@ -195,6 +195,7 @@ class OMXPlayerSync():
         self.process = None
         self.acceleration = 0
 
+        self.thread = None
         self.update = threading.Event()
         self.quit = threading.Event()
 
@@ -242,12 +243,10 @@ class OMXPlayerSync():
         if self.options.master:
             self.init_broadcast(self.options.destination)
 
-        # Blocking -> Non-blocking
-        self.init_socket()
-        threading.Thread(target=self.read_broadcasts, args=[]).start()
-
         if self.options.slave:
             self.set_playlist_index()
+
+        self.init_socket()
 
         while True:
             self.play_file(self.playlist[self.playlist_index])
@@ -512,16 +511,30 @@ class OMXPlayerSync():
 
     def init_socket(self):
 
-        # Close and free existing
+        # Join exisiting thread
+        if self.thread and self.thread.is_alive():
+            _print('WARNING: stopping socket thread')
+            self.quit.set()
+            self.thread.join()
+
+        # Close and free existing socket
         if isinstance(self.sock, socket.socket):
             _print('WARNING: closing previously used socket')
-            self.sock.shutdown(socket.SHUT_RDWR)
-            self.sock.close()
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError as e:
+                _print(f'WARNING: {e}')
+            finally:
+                self.sock.close()
 
         # Init
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(('0.0.0.0', PORT))
+
+        # Non-blocking listener
+        self.thread = threading.Thread(target=self.read_broadcasts, args=[]).start()
+
 #        return sock
 
     def kill_omxplayer(self):
@@ -529,6 +542,10 @@ class OMXPlayerSync():
 
         # Signal thread to quit
         self.quit.set()
+
+        #
+        # thread.is_alive() thread.join()
+        #
 
         try:
             os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
