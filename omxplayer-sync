@@ -175,8 +175,10 @@ class PlayerInterface():
 #
 class OMXPlayerSync():
     def __init__(self):
-        self.sock = self.init_socket()
-        self.broadcast = self.init_broadcast()
+
+        self.sock = None
+        self.broadcast = None
+        
         self.controller = PlayerInterface()
 
         self.options = None
@@ -238,9 +240,10 @@ class OMXPlayerSync():
             self.omxplayer_options.append('--no-osd')
 
         if self.options.master:
-            self.broadcast_connect(self.options.destination)
+            self.init_broadcast(self.options.destination)
 
         # Blocking -> Non-blocking
+        self.init_socket()
         threading.Thread(target=self.read_broadcasts, args=[]).start()
 
         if self.options.slave:
@@ -252,6 +255,9 @@ class OMXPlayerSync():
                 break
 
     def play_file(self, filename):
+
+        _print(f'Start playing {filename}...')
+
         if not os.path.isfile(filename):
             if self.options.verbose:
                 _print("WARNING: %s file not found" % filename)
@@ -304,10 +310,8 @@ class OMXPlayerSync():
                     last_update = time()
                 # Timeout expired, try to re-connect
                 elif (time() - last_update) > SYNC_NETWORK_TIMEOUT:
-                    _print(f'WARNING: there is an issue with connection to primary, trying to re-connect..')
-                    self.sock.shutdown(socket.SHUT_RDWR)
-                    self.sock.close()
-                    self.sock = self.init_socket()
+                    _print(f'WARNING: unable to get playback time from primary, trying to re-connect..')
+                    self.init_socket()
                     last_update = time()
                     continue
                 # Timeout, but give it some time to recover, do not block
@@ -507,13 +511,23 @@ class OMXPlayerSync():
         return False
 
     def init_socket(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(('0.0.0.0', PORT))
-        return sock
+
+        # Close and free existing
+        if isinstance(self.sock, socket.socket):
+            _print('WARNING: closing previously used socket')
+            self.sock.shutdown(socket.SHUT_RDWR)
+            self.sock.close()
+
+        # Init
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(('0.0.0.0', PORT))
+#        return sock
 
     def kill_omxplayer(self):
         _print('kill_omxplayer()')
+
+        # Signal thread to quit
         self.quit.set()
 
         try:
@@ -533,49 +547,33 @@ class OMXPlayerSync():
     #
     # master specific
     #
-    def init_broadcast(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        return sock
+    def init_broadcast(self, destination):
 
-    def broadcast_connect(self, destination):
+        # Close and free existing
+        if isinstance(self.broadcast, socket.socket):
+            _print('WARNING: Closing previously used socket')
+            self.broadcast.shutdown(socket.SHUT_RDWR)
+            self.broadcast.close()
+
+        # Init
+        self.broadcast = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+        self.broadcast.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+        # Connect
         try:
             self.broadcast.connect((destination, PORT))
         except:
-            _print("connect: Network is unreachable")
-#            pass
+            _print('WARNING: Broadcast --> Network is unreachable')
 
     def broadcast_position_local(self):
         try:
             self.broadcast.send(("%s%%%s" % (str(self.position_local),  self.filename)).encode('utf-8'))
         except socket.error as e:
             _print(f'WARNING: socket.error while broadcasting --> {e}')
-#            pass
-
-    def socket_enable_broadcast(self):
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-
-    def socket_connect(self, destination):
-        try:
-            self.sock.connect((destination, PORT))
-        except:
-            _print("connect: Network is unreachable")
-            pass
-
-    def send_position_local(self):
-        try:
-            self.sock.send(("%s%%%s" % (str(self.position_local),  self.filename)).encode('utf-8'))
-        except socket.error:
-            pass
-
 
     #
     # slave specific
     #
-    def read_position_master(self):
-        data = self.sock.recvfrom(1024)[0].decode('utf-8').split('%', 1)
-        self.position_master = float(data[0])
-        self.filename_master = data[1]
 
     def median(self, lst):
         quotient, remainder = divmod(len(lst), 2)
@@ -608,8 +606,8 @@ class OMXPlayerSync():
             data, sender = self.sock.recvfrom(1024)
             data = data.decode('utf-8')
 
-            print('')
-            print(data)
+#            print('')
+#            print(data)
 
                 #
                 # All good!
@@ -639,10 +637,11 @@ class OMXPlayerSync():
 
             # Sync
             elif self.options.slave:
-                data = data.split('%', 1)
-                self.position_master = float(data[0])
-                self.filename_master = data[1]
-                self.update.set()
+                if len(data):
+                    data = data.split('%', 1)
+                    self.position_master = float(data[0])
+                    self.filename_master = data[1]
+                    self.update.set()
 
             # Should have received something by now
 #            except socket.timeout:
