@@ -315,7 +315,7 @@ class OMXPlayerSync():
                     continue
                 # Timeout, but give it some time to recover, do not block
                 else:
-                    _print(f'WARNING: unable to get playback time from primary{"":<25}') 
+#                    _print(f'WARNING: unable to get playback time from primary{"":<25}') 
                     continue
 
             if self.options.master:
@@ -618,47 +618,50 @@ class OMXPlayerSync():
             if self.quit.is_set():
                 break
 
- #           try:
-            # Wait for sync data
-            data, sender = self.sock.recvfrom(1024)
-            data = data.decode('utf-8')
+            try:
+                # Wait for sync data
+                data, sender = self.sock.recvfrom(1024)
+                data = data.decode('utf-8')
 
-#            print('')
-#            print(data)
+    #            print('')
+    #            print(data)
 
-                #
-                # All good!
-                #
+                    #
+                    # All good!
+                    #
 
-                # Reset
-#                timeout_count = 0
+                    # Reset
+    #                timeout_count = 0
 
-            # Protocol
-            if data.startswith('%'):
+                # Protocol
+                if data.startswith('%'):
 
-                # Parse
-                if data.startswith('%hello='):
-                    pass
-                if data.startswith('%diff='):
-                    if self.options.slave:
-                        key, val = data.split('=', 1)
-                        self.position_diff = float(val)
-                        _print(f'Diff set to {self.position_diff:.1f}s')
-                elif data.startswith('%play'):
-                    self.controller.play()
-                elif data.startswith('%pause'):
-                    self.controller.pause()
+                    # Parse
+                    if data.startswith('%hello='):
+                        pass
+                    if data.startswith('%diff='):
+                        if self.options.slave:
+                            key, val = data.split('=', 1)
+                            self.position_diff = float(val)
+                            _print(f'Diff set to {self.position_diff:.1f}s')
+                    elif data.startswith('%play'):
+                        self.controller.play()
+                    elif data.startswith('%pause'):
+                        self.controller.pause()
 
-                # Confirm received
-                self.sock.sendto(f'OK {data}'.encode('utf-8'), sender)
+                    # Confirm received
+                    self.sock.sendto(f'OK {data}'.encode('utf-8'), sender)
 
-            # Sync
-            elif self.options.slave:
-                if len(data):
-                    data = data.split('%', 1)
-                    self.position_master = float(data[0])
-                    self.filename_master = data[1]
-                    self.update.set()
+                # Sync
+                elif self.options.slave:
+                    if len(data):
+                        data = data.split('%', 1)
+                        self.position_master = float(data[0])
+                        self.filename_master = data[1]
+                        self.update.set()
+
+            except Exception as e:
+                _print(f'WARNING: {e}')
 
             # Should have received something by now
 #            except socket.timeout:
