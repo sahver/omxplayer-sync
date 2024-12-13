@@ -39,7 +39,7 @@ SYNC_JUMP = 1
 SYNC_SMOOTHING = 10
 
 SYNC_NETWORK_TIMEOUT = SYNC_FREQ * 2
-SYNC_NETWORK_TIMEOUT_GRACE_TIME = SYNC_NETWORK_TIMEOUT * 10
+SYNC_NETWORK_TIMEOUT_GRACE_TIME = 60
 
 OMXPLAYER = 'omxplayer'
 OMXPLAYER_DBUS_ADDR='/tmp/omxplayerdbus.%s' % getpass.getuser()
@@ -106,8 +106,10 @@ class PlayerInterface():
 
     def initialize(self):
         while not self._get_dbus_interface():
+            _print('WARNING: initialize(): dbus connection could not be established')
             sleep(0.1)
         while not self.getPosition():
+            _print('WARNING: initialize(): unable to get player position')
             sleep(0.1)
         return self._get_dbus_interface()
 
@@ -176,8 +178,6 @@ class PlayerInterface():
 class OMXPlayerSync():
     def __init__(self):
 
-        self.sock = self.init_socket()
-        self.broadcast = self.init_broadcast()
         self.controller = PlayerInterface()
 
         self.options = None
@@ -240,7 +240,7 @@ class OMXPlayerSync():
             self.omxplayer_options.append('--no-osd')
 
         if self.options.master:
-            self.broadcast_connect(self.options.destination)
+            self.broadcast = self.broadcast_setup(self.options.destination)
 
         # Blocking -> Non-blocking
         threading.Thread(target=self.read_broadcasts, args=[]).start()
@@ -249,8 +249,10 @@ class OMXPlayerSync():
             self.set_playlist_index()
 
         while True:
+            _print('self.play_file()')
             self.play_file(self.playlist[self.playlist_index])
             if not self.options.loop and self.playlist_index == 0:
+                _print('BREAK: not self.options.loop and self.playlist_index == 0')
                 break
 
     def play_file(self, filename):
@@ -268,11 +270,13 @@ class OMXPlayerSync():
         if self.options.master:
             self.broadcast_position_local()
 
+        _print('subprocess.Popen()')
         self.process = subprocess.Popen([OMXPLAYER] \
             + list(itertools.chain(*map(lambda x: x.split(' '), self.omxplayer_options))) \
             + [self.filename],
             preexec_fn=os.setsid, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, bufsize=0)
         
+        _print('controller.initialize()')
         self.controller.initialize()
 
         if not self.read_position_local():
@@ -284,10 +288,12 @@ class OMXPlayerSync():
             last_sync = time()
             deviations = collections.deque(maxlen=SYNC_SMOOTHING)
             duration = float(self.controller.getDuration())/1000000
+            median_deviation = 0
 
         if self.options.verbose:
             first_frame = True
 
+        _print('*** START SYNCING ***')
         while True:
 
             if not self.read_position_local():
@@ -505,22 +511,19 @@ class OMXPlayerSync():
 
         return False
 
-    def init_socket(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(('0.0.0.0', PORT))
-        return sock
-
     def kill_omxplayer(self):
-        _print('kill_omxplayer()')
+        _print('kill_omxplayer() begin')
         try:
             os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
-        except:
-            pass
+        except Exception as e:
+            _print('WARNING: {e}')
+#            pass
         try:
             self.process.wait()
-        except:
-            pass
+        except Exception as e:
+            _print('WARNING: {e}')
+#            pass
+        _print('kill_omxplayer() complete')
 
     def kill_omxplayer_and_exit(self, *args):
         _print('kill_omxplayer_and_exit()')
@@ -536,14 +539,12 @@ class OMXPlayerSync():
     #
     # master specific
     #
-    def init_broadcast(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        return sock
-
-    def broadcast_connect(self, destination):
+    def broadcast_setup(self, destination):
         try:
-            self.broadcast.connect((destination, PORT))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.connect((destination, PORT))
+            return sock
         except Exception as e:
             _print(f'ERROR: broadcast_connect(): {e}')
 
@@ -569,6 +570,10 @@ class OMXPlayerSync():
 
     def read_broadcasts(self):
 
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', PORT))
+
         while True:
 
             # Quit signal
@@ -577,7 +582,7 @@ class OMXPlayerSync():
 
             try:
                 # Wait for sync data
-                data, sender = self.sock.recvfrom(1024)
+                data, sender = sock.recvfrom(1024)
                 data = data.decode('utf-8')
 
 #                print('')
@@ -604,7 +609,7 @@ class OMXPlayerSync():
                         self.controller.pause()
 
                     # Confirm received
-                    self.sock.sendto(f'OK {data}'.encode('utf-8'), sender)
+                    sock.sendto(f'OK {data}'.encode('utf-8'), sender)
 
                 # Sync
                 elif self.options.slave:
