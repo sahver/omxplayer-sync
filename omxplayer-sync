@@ -471,7 +471,7 @@ class OMXPlayerSync():
         position_local = self.controller.getPosition()
         try:
             self.position_local = float(position_local)/1000000
-        except ValueError as e:
+        except Exception as e:
             _print(f'ERROR: read_position_local() --> "{e}"')
             return False
 
