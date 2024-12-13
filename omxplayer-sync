@@ -38,8 +38,8 @@ SYNC_GRACE_TIME = 3
 SYNC_JUMP = 1
 SYNC_SMOOTHING = 10
 
-SYNC_NETWORK_GRACE_TIME = SYNC_FREQ * 2
-SYNC_NETWORK_TIMEOUT = SYNC_NETWORK_GRACE_TIME * 10
+SYNC_NETWORK_TIMEOUT = SYNC_FREQ * 2
+SYNC_NETWORK_TIMEOUT_GRACE_TIME = SYNC_NETWORK_TIMEOUT * 10
 
 OMXPLAYER = 'omxplayer'
 OMXPLAYER_DBUS_ADDR='/tmp/omxplayerdbus.%s' % getpass.getuser()
@@ -141,7 +141,7 @@ class PlayerInterface():
                 'org.mpris.MediaPlayer2.Player',
                 'Duration')
         except Exception as e:
-            return False
+            return None
 
     def setPosition(self, seconds):
         try:
@@ -160,7 +160,7 @@ class PlayerInterface():
                 'org.mpris.MediaPlayer2.Player',
                 'Position')
         except Exception as e:
-            return False
+            return None
 
     def isPlaying(self):
         try:
@@ -176,9 +176,8 @@ class PlayerInterface():
 class OMXPlayerSync():
     def __init__(self):
 
-        self.sock = None
-        self.broadcast = None
-
+        self.sock = self.init_socket()
+        self.broadcast = self.init_broadcast()
         self.controller = PlayerInterface()
 
         self.options = None
@@ -196,8 +195,8 @@ class OMXPlayerSync():
         self.acceleration = 0
 
         self.thread = None
-        self.update = threading.Event()
-        self.quit = threading.Event()
+        self.thread_update = threading.Event()
+        self.thread_quit = threading.Event()
 
         signal.signal(signal.SIGINT, self.kill_omxplayer_and_exit)
 
@@ -241,12 +240,13 @@ class OMXPlayerSync():
             self.omxplayer_options.append('--no-osd')
 
         if self.options.master:
-            self.init_broadcast(self.options.destination)
+            self.broadcast_connect(self.options.destination)
+
+        # Blocking -> Non-blocking
+        threading.Thread(target=self.read_broadcasts, args=[]).start()
 
         if self.options.slave:
             self.set_playlist_index()
-
-        self.init_socket()
 
         while True:
             self.play_file(self.playlist[self.playlist_index])
@@ -254,9 +254,6 @@ class OMXPlayerSync():
                 break
 
     def play_file(self, filename):
-
-        _print(f'Start playing {filename}...')
-
         if not os.path.isfile(filename):
             if self.options.verbose:
                 _print("WARNING: %s file not found" % filename)
@@ -294,15 +291,9 @@ class OMXPlayerSync():
         while True:
 
             if not self.read_position_local():
-                # During looping it can return False for a monement,
-                # so give a second change after a brief moment
-                _print('WARNING: not self.read_position_local()')
-                sleep(SYNC_FREQ)
-                # Try again
-                if not self.read_position_local():
-                    self.increment_playlist_index()
-                    _print('BREAK: not self.read_position_local()')
-                    break
+                self.increment_playlist_index()
+                _print('BREAK: not self.read_position_local()')
+                break
 
             if self.hangup_detected():
                 _print('BREAK: self.hangup_detected()')
@@ -310,15 +301,13 @@ class OMXPlayerSync():
 
             if self.options.slave:
                 # Wait for sync data from primary
-                if self.update.wait(timeout=(SYNC_NETWORK_GRACE_TIME)):
-                    self.update.clear()
+                if self.thread_update.wait(timeout=(SYNC_NETWORK_TIMEOUT)):
+                    self.thread_update.clear()
                     last_update = time()
                 # Timeout expired, try to re-connect
-                elif (time() - last_update) > SYNC_NETWORK_TIMEOUT:
-                    _print(f'WARNING: unable to get playback time from primary, trying to re-connect..')
-                    self.init_socket()
-                    last_update = time()
-                    continue
+                elif (time() - last_update) > SYNC_NETWORK_TIMEOUT_GRACE_TIME:
+                    _print(f'BREAK: unable to get playback time from primary{"":<25}')
+                    break
                 # Timeout, but give it some time to recover, do not block
                 else:
 #                    _print(f'WARNING: unable to get playback time from primary{"":<25}') 
@@ -480,10 +469,10 @@ class OMXPlayerSync():
 
     def read_position_local(self):
         position_local = self.controller.getPosition()
-        if position_local:
+        try:
             self.position_local = float(position_local)/1000000
-        else:
-            _print(f'WARNING: unable to get local position --> "{position_local}"')
+        except ValueError as e:
+            _print(f'ERROR: read_position_local() --> "{e}"')
             return False
 
         return True
@@ -517,43 +506,13 @@ class OMXPlayerSync():
         return False
 
     def init_socket(self):
-
-        # Join exisiting thread
-        if self.thread and self.thread.is_alive():
-            _print('WARNING: stopping socket thread')
-            self.quit.set()
-            self.thread.join()
-
-        # Close and free existing socket
-        if isinstance(self.sock, socket.socket):
-            _print('WARNING: closing previously used socket')
-            try:
-                self.sock.shutdown(socket.SHUT_RDWR)
-            except OSError as e:
-                _print(f'ERROR: init_socket(): {e}')
-            finally:
-                self.sock.close()
-
-        # Init
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(('0.0.0.0', PORT))
-
-        # Non-blocking listener
-        self.thread = threading.Thread(target=self.read_broadcasts, args=[]).start()
-
-#        return sock
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', PORT))
+        return sock
 
     def kill_omxplayer(self):
         _print('kill_omxplayer()')
-
-        # Signal thread to quit
-        self.quit.set()
-
-        #
-        # thread.is_alive() thread.join()
-        #
-
         try:
             os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
         except:
@@ -565,35 +524,34 @@ class OMXPlayerSync():
 
     def kill_omxplayer_and_exit(self, *args):
         _print('kill_omxplayer_and_exit()')
+        # Signal thread to quit
+        self.thread_quit.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join()
+        # Stop process
         self.kill_omxplayer()
+        # Quit to system
         sys.exit(0)
 
     #
     # master specific
     #
-    def init_broadcast(self, destination):
+    def init_broadcast(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        return sock
 
-        # Close and free existing
-        if isinstance(self.broadcast, socket.socket):
-            _print('WARNING: Closing previously used broadcast socket')
-            self.broadcast.shutdown(socket.SHUT_RDWR)
-            self.broadcast.close()
-
-        # Init
-        self.broadcast = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
-        self.broadcast.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-
-        # Connect
+    def broadcast_connect(self, destination):
         try:
             self.broadcast.connect((destination, PORT))
-        except:
-            _print('WARNING: Broadcast --> Network is unreachable')
+        except Exception as e:
+            _print(f'ERROR: broadcast_connect(): {e}')
 
     def broadcast_position_local(self):
         try:
             self.broadcast.send(("%s%%%s" % (str(self.position_local),  self.filename)).encode('utf-8'))
-        except socket.error as e:
-            _print(f'ERROR: socket.error while broadcasting --> {e}')
+        except Exception as e:
+            _print(f'ERROR: broadcast_position_local(): {e}')
 
     #
     # slave specific
@@ -611,18 +569,10 @@ class OMXPlayerSync():
 
     def read_broadcasts(self):
 
-#        timeout = SYNC_FREQ * 5
-#        timeout_count = 0
-#        timeout_retry = 5
-
-        # Timeout only for followers
-#        if self.options.slave:
-#            self.sock.settimeout(timeout)
-
         while True:
 
             # Quit signal
-            if self.quit.is_set():
+            if self.thread_quit.is_set():
                 break
 
             try:
@@ -630,15 +580,12 @@ class OMXPlayerSync():
                 data, sender = self.sock.recvfrom(1024)
                 data = data.decode('utf-8')
 
-    #            print('')
-    #            print(data)
+#                print('')
+#                print(data)
 
-                    #
-                    # All good!
-                    #
-
-                    # Reset
-    #                timeout_count = 0
+                #
+                # All good!
+                #
 
                 # Protocol
                 if data.startswith('%'):
@@ -665,29 +612,10 @@ class OMXPlayerSync():
                         data = data.split('%', 1)
                         self.position_master = float(data[0])
                         self.filename_master = data[1]
-                        self.update.set()
+                        self.thread_update.set()
 
             except Exception as e:
                 _print(f'ERROR: read_broadcasts(): {e}')
-
-            # Should have received something by now
-#            except socket.timeout:
-
-#                timeout_count += 1
-
-                # Problems, reopen socket
-#                if timeout_count >= timeout_retry:
-#                    _print(f'WARNING: unable to get playback time from primary (retries={timeout_retry})')
-#                    self.sock.close()
-#                    self.sock = self.init_socket()
-#                    _print(f'WARNING: closed and re-opened socket')
-
-                    # Timeout only for followers
-#                    if self.options.slave:
-#                        self.sock.settimeout(timeout)
-
-                    # Reset
-#                    timeout_count = 0
 
 if __name__ == '__main__':
     OMXPlayerSync().run()
