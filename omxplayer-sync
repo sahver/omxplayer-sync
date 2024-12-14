@@ -16,6 +16,7 @@ import os
 import sys
 import math
 import socket
+import select
 import signal
 import subprocess
 import threading
@@ -309,11 +310,11 @@ class OMXPlayerSync():
                 # Wait for sync data from primary
                 if self.thread_update.wait(timeout=(SYNC_NETWORK_TIMEOUT)):
                     self.thread_update.clear()
-                    last_update = time()
+#                    last_update = time()
                 # Timeout expired, try to re-connect
-                elif (time() - last_update) > SYNC_NETWORK_TIMEOUT_GRACE_TIME:
-                    _print(f'BREAK: unable to get playback time from primary{"":<25}')
-                    break
+#                elif (time() - last_update) > SYNC_NETWORK_TIMEOUT_GRACE_TIME:
+#                    _print(f'ERROR: unable to get playback time from primary{"":<25}')
+#                    last_update = time()
                 # Timeout, but give it some time to recover, do not block
                 else:
 #                    _print(f'WARNING: unable to get playback time from primary{"":<25}') 
@@ -570,57 +571,84 @@ class OMXPlayerSync():
 
     def read_broadcasts(self):
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(('0.0.0.0', PORT))
+        _print(f'Listening to broadcasts at :{PORT}')
 
+        # Connect, re-connect
         while True:
 
-            # Quit signal
-            if self.thread_quit.is_set():
-                break
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setblocking(0)
+            sock.bind(('0.0.0.0', PORT))
 
-            try:
-                # Wait for sync data
-                data, sender = sock.recvfrom(1024)
-                data = data.decode('utf-8')
+            last = time()
 
-#                print('')
-#                print(data)
+            # Read data
+            while True:
 
-                #
-                # All good!
-                #
+                # Signals
+                if self.thread_quit.is_set():
+                    return
 
-                # Protocol
-                if data.startswith('%'):
+                # Wait for data
+                ready = select.select([sock], [], [], SYNC_FREQ * 2)
 
-                    # Parse
-                    if data.startswith('%hello='):
-                        pass
-                    if data.startswith('%diff='):
-                        if self.options.slave:
-                            key, val = data.split('=', 1)
-                            self.position_diff = float(val)
-                            _print(f'Diff set to {self.position_diff:.1f}s')
-                    elif data.startswith('%play'):
-                        self.controller.play()
-                    elif data.startswith('%pause'):
-                        self.controller.pause()
+                # Data available
+                if ready[0]:
 
-                    # Confirm received
-                    sock.sendto(f'OK {data}'.encode('utf-8'), sender)
+                    last = time()
 
-                # Sync
-                elif self.options.slave:
-                    if len(data):
-                        data = data.split('%', 1)
-                        self.position_master = float(data[0])
-                        self.filename_master = data[1]
-                        self.thread_update.set()
+                    # Wait for sync data
+                    data, sender = sock.recvfrom(1024)
+                    data = data.decode('utf-8')
 
-            except Exception as e:
-                _print(f'ERROR: read_broadcasts(): {e}')
+    #                print('')
+    #                print(data)
+
+                    #
+                    # All good!
+                    #
+
+                    # Protocol
+                    if data.startswith('%'):
+
+                        # Parse
+                        if data.startswith('%hello='):
+                            pass
+                        if data.startswith('%diff='):
+                            if self.options.slave:
+                                key, val = data.split('=', 1)
+                                self.position_diff = float(val)
+                                _print(f'Diff set to {self.position_diff:.1f}s')
+                        elif data.startswith('%play'):
+                            self.controller.play()
+                        elif data.startswith('%pause'):
+                            self.controller.pause()
+
+                        # Confirm received
+                        sock.sendto(f'OK {data}'.encode('utf-8'), sender)
+
+                    # Sync
+                    elif self.options.slave:
+                        if len(data):
+                            data = data.split('%', 1)
+                            self.position_master = float(data[0])
+                            self.filename_master = data[1]
+                            self.thread_update.set()
+                # Timeout
+                elif (time() - last) > SYNC_NETWORK_TIMEOUT_GRACE_TIME:
+                    break
+
+            # Re-connect
+            _print('WARNING: re-connect broadcast socket..')
+#            try:
+#                sock.shutdown(socket.SHUT_RDWR)
+#            except Exception as e:
+#                _print(f'WARNING: sock.shutdown(): {e}')
+#            finally:
+            sock.close()
+            sleep(5)
+
 
 if __name__ == '__main__':
     OMXPlayerSync().run()
