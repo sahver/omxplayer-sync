@@ -304,7 +304,8 @@ class OMXPlayerSync():
                 # Wait for sync data from primary
                 if self.thread_update.wait(timeout=(SYNC_NETWORK_TIMEOUT)):
                     self.thread_update.clear()
-                # Timeout, try again
+                    # Sync arrived, get our position
+                    self.read_position_local()
                 else:
 #                    _print(f'WARNING: unable to get playback time from primary{"":<25}') 
                     continue
@@ -536,6 +537,9 @@ class OMXPlayerSync():
 
     def broadcast_position_local(self):
         try:
+            # Get position just before..
+            self.read_position_local()
+            # .. broadcast
             self.broadcast.send(("%s%%%s" % (str(self.position_local),  self.filename)).encode('utf-8'))
         except Exception as e:
             _print(f'ERROR: broadcast_position_local(): {e}')
